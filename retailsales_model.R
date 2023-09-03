@@ -37,9 +37,12 @@ data3 <- read_csv("~/GitHub/retailsales/stores.csv") %>%
 # proceed not only with the models, but also whether we want to merge any of the datasets we
 # have at hand.
 
-df1 <- list(data1, data2) %>%
-  reduce(left_join, by = c("Store", "Date", "IsHoliday")) %>% 
-  drop_na(Weekly_Sales) # Remove columns with NA in weekly sales.
+df0 <- list(data1, data2) %>%
+  reduce(left_join, by = c("Store", "Date", "IsHoliday"))
+
+df1 <- list(df0, data3) %>% 
+  reduce(left_join, by = "Store") %>%
+  drop_na(., Weekly_Sales)
 
 # Once we have the data, it may be beneficial for us to understand the nature of the data
 # we are dealing with. How many observations are there? What is the minimum number of sales?
@@ -54,15 +57,14 @@ datasummary(((`Weekly Sales` = `Weekly_Sales`) + (`Fuel Price` = `Fuel_Price`) +
 # How do sales numbers fluctuate with time?
 
 df1 %>% 
+  filter(., Weekly_Sales > 0) %>% 
   group_by(., Date) %>% 
   reframe(., totalsales = sum(Weekly_Sales, na.rm = TRUE)) %>% 
   ggplot(., aes(x = Date,
                 y = totalsales)) +
   geom_line() +
-  geom_smooth(method = 'lm', se = F) +
   scale_y_continuous(labels = scales::comma) +
-  scale_x_date(limits = c(min(df1$Date), max(df1$Date)),
-               date_breaks = "3 months", date_labels = "%m/%Y") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%m/%Y") +
   labs(x = "Date",
        y = "Total Sales ($)",
        title = "All sales over time") +
@@ -71,25 +73,31 @@ df1 %>%
         panel.grid.minor.y = element_blank(),
         axis.text.x = element_text(angle = 60, vjust = 0.6, hjust = 0.5))
   
-
 # Modeling ----
 
-# At first, for instance, we may simply be curious about the relationship between temperatures
-# and sales. Do people shop more on days which are cooler? Hotter? In order to do this, merging
-# is necessary.
+# Which factors influence sales the most, and how? We can make some models to get at this
+# question. This model will also permit us to forecast future sales.
 
-# First, a visualization of what the distribution of weekly sales looks like.
-ggplot(data = df1,
-       aes(x = Date,
-           y = Temperature)) +
-  geom_point()
+lm1 <- lm_robust(Weekly_Sales ~ CPI + Unemployment + Fuel_Price + IsHoliday,
+                 data = df1,
+                 clusters = Store,
+                 # Clustering by store is really, really, really, really important.
+                 # This is because stores, in all likelihood, are independent of each other.
+                 # In other words, a sale made in Store 1 probably has nothing to do with
+                 # a sale made in Store 6. Therefore, we want to cluster the standard errors
+                 # of our model by store to be able to see effects. If we do not do this,
+                 # then---due to the large amount of observations---every coefficient will
+                 # be statistically significant, when that isn't really the case.
+                 se_type = "stata" # Necessary due to bug in `estimatr` package to avoid a crash.
+                 )
 
-lm1 <- lm(Weekly_Sales ~ Temperature,
-          data = df1)
-
-# This is a really simple model. We're simply looking at the relationship between weekly sales
-# and temperature and nothing more.
-
-modelsummary(lm1, stars = TRUE)
-
-
+modelsummary(lm1,
+             output = 'kableExtra',
+             stars = c('*' = .1, '**' = .05, '***' = .01),
+             coef_map = c('CPI' = 'Inflation index',
+                          'Unemployment' = 'Unemployment',
+                          'Fuel_Price' = 'Fuel Price',
+                          'IsHolidayTRUE' = 'Holiday',
+                          '(Intercept)' = 'Constant'),
+             gof_omit = 'AIC|BIC|RMSE'
+             )
